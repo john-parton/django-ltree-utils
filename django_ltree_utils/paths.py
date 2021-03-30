@@ -73,21 +73,23 @@ class PathFactory:
 
         return total
 
-    def parent(self, path: Path) -> Path:
-        return path[:-1]
+    def split(self, path: Path) -> typing.Tuple[Path, int]:
+        *parent, position = path
+        return parent, self.decode(position)
 
     def nth_child(self, path: Path, n: int) -> Path:
         return path + [self.encode(n)]
 
+    def children(self, path: Path) -> typing.Iterator[Path]:
+        for label in map(self.encode, it.count()):
+            yield path + [label]
+
     def next_siblings(self, path: Path) -> typing.Iterator[Path]:
-        *parent, position = path
+        parent, child_index = self.split(path)
 
         # Tabulate
-        start_index = self.decode(position) + 1
+        start_index = child_index + 1
         labels = map(self.encode, it.count(start_index))
 
         for label in labels:
             yield parent + [label]
-
-    def child_index(self, path: Path) -> int:
-        return self.decode(path[-1])

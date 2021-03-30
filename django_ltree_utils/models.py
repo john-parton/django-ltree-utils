@@ -129,8 +129,7 @@ class NodePosition(enum.Enum):
         elif position == cls.FIRST_CHILD:
             return relative_to, 0
         elif position in {cls.LEFT, cls.RIGHT}:
-            parent = path_factory.parent(relative_to)
-            child_index = path_factory.child_index(relative_to)
+            parent, child_index = path_factory.split(relative_to)
 
             if position == cls.RIGHT:
                 child_index += 1
@@ -167,7 +166,18 @@ class TreeManager(models.Manager):
     # Private API, don't call this directly, call .create(child_of=parent)
     # args have underscore to avoid colliding with model fields
     def _create_child(self, parent: Path, child_index: typing.Optional[int], attributes):
+        insertion_path = self._get_insertion_path(parent, child_index)
 
+        return super().create(
+            **{self.path_field: insertion_path},
+            **attributes
+        )
+
+    def _get_insertion_path(self, parent: Path, child_index: typing.Optional[int]) -> Path:
+        """
+        Modifies the tree so that we can insert a node as the nth child of parent.
+        Returns the resolved Path.
+        """
         # Insert at the end, figure out what the actual index needs to be
         if child_index is None:
             try:
@@ -195,10 +205,7 @@ class TreeManager(models.Manager):
                 insertion_path
             )
 
-        return super().create(
-            **{self.path_field: insertion_path},
-            **attributes
-        )
+        return insertion_path
 
     def _move_right(self, gap_path: Path):
         """Move every node to the right (inclusive) of ltree right one
@@ -230,6 +237,31 @@ class TreeManager(models.Manager):
             zip(to_move, self.path_factory.next_siblings(gap_path))
         )
 
+    def bulk_create(self, branch, **kwargs):
+        # Just does one branch
+        # I was going to have a bulkier api where you could create multiple branches at the same
+        # time, but it tended to make things more complicated because the entire tree mutates every
+        # time you graft a branch
+
+        # kwargs is mutated
+        parent, index = NodePosition._parse_kwargs(
+            kwargs, path_field=self.path_field, path_factory=self.path_factory
+        )
+
+        insertion_path = self._get_insertion_path(parent, index)
+
+        # Recursively walk through branch structure and generate instances with calculated paths
+        def walk(node, path):
+            children = node.pop('children', [])
+            node[self.path_field] = path
+            yield self.model(**node)
+
+            for child, path in zip(children, self.path_factory.children(path)):
+                yield from walk(child, path)
+
+        return super().bulk_create(walk(branch, insertion_path), **kwargs)
+
+
     def _bulk_move(self, path_tuples: typing.Iterable[typing.Tuple[Path, Path]]) -> int:
         # We should probably check that all of the old/new paths
         # Are the same depth
@@ -246,7 +278,6 @@ class TreeManager(models.Manager):
             new_path = '.'.join(new_path)
 
             q.append(
-                # TOOD Use path attribute
                 Q(**{f'{self.path_field}__descendant_of': old_path})
             )
             cases.extend([
@@ -271,41 +302,6 @@ class TreeManager(models.Manager):
         ).update(**{
             self.path_field: Case(*cases)
         })
-
-    # # Doe an "absolute" move from one path to another path
-    # # Does NO Checking, you can seriously bust the tree if you call this without being careful
-    # def _move(self, old_path: str, new_path: str):
-    #     # No-op, sometimes happens if the tree is sparser than necessary
-    #     if old_path == new_path:
-    #         return 0
-    #
-    #     # print(old_path, new_path)
-    #
-    #     return self.filter(
-    #         path__descendant_of=old_path
-    #     ).update(
-    #         path=RawSQL(
-    #             # TODO Use functions
-    #             r"""
-    #                 -- I have a question for god. WHY?
-    #                 CASE
-    #                     WHEN path = %s::ltree THEN %s::ltree
-    #                     ELSE
-    #                         %s::ltree || subpath(
-    #                             "path",
-    #                             nlevel(%s::ltree)
-    #                         )
-    #                 END
-    #             """,
-    #             params=(
-    #                 old_path, new_path,
-    #                 new_path, old_path
-    #             )
-    #         )
-    #     )
-
-    # def move(self, instance, **kwargs):
-
 
     def create(self, *args, **kwargs):
         # kwargs is mutated
@@ -346,7 +342,6 @@ class AbstractNode(models.Model):
         return self.path
 
 
-
     # def move(self, **kwargs):
     #
     #
@@ -359,6 +354,8 @@ class AbstractNode(models.Model):
         abstract = True
         ordering = ['path']
         constraints = [
+            # We want this deferred, because sometimes we move more than one node at once
+            # and there might be an intermediate step where nodes conflict
             models.UniqueConstraint(
                 name='%(app_label)s_%(class)s_unique_path_deferred',
                 fields=['path'],

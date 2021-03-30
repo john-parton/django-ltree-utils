@@ -18,6 +18,30 @@ class TestCategoryModel(TestCase):
 
     def setUp(self):
 
+        Category.objects.bulk_create({
+            'name': 'One',
+            'children': [{
+                'name': 'Graft Here',
+                'children': [{
+                    'name': 'One'
+                }]
+            }, {
+                'name': 'Two'
+            }]
+        }, root=True)
+
+        Category.objects.bulk_create({
+            'name': 'Grafted',
+            'children': [{
+                'name': 'One',
+                'children': [{
+                    'name': 'One'
+                }]
+            }, {
+                'name': 'Two'
+            }]
+        }, child_of=Category.objects.get(name='Graft Here'))
+
         foo = Category.objects.create(root=True, name='Foo')
 
         bar = Category.objects.create(child_of=foo, name='Bar')
