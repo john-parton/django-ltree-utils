@@ -8,6 +8,7 @@ test_django-ltree-utils
 Tests for `django-ltree-utils` models module.
 """
 
+from django.db.models import Subquery, Q
 from django.test import TestCase
 
 from django_ltree_utils.test_utils.test_app.models import Category
@@ -42,17 +43,56 @@ class TestCategoryModel(TestCase):
             }]
         }, child_of=Category.objects.get(name='Graft Here'))
 
+
         foo = Category.objects.create(root=True, name='Foo')
 
         bar = Category.objects.create(child_of=foo, name='Bar')
-        qux = Category.objects.create(right_of=bar, name='Qux')
+        qux = Category.objects.create(after=bar, name='Qux')
         Category.objects.create(child_of=qux, name='Quxy')
-        Category.objects.create(right_of=qux, name='Qux-2')
-        qur = Category.objects.create(left_of=qux, name='Qur')
+        Category.objects.create(after=qux, name='Qux-2')
+        qur = Category.objects.create(before=qux, name='Qur')
 
+        roots = Category.objects.all().roots()
+
+        print("TEST #1")
+        print_tree(roots)
+
+        print("Subtree of 'Foo'")
         print_tree(
-            Category.objects.all().roots()
+            Category.objects.filter(
+                path__descendant_of=Subquery(
+                    Category.objects.filter(
+                        path__depth=1,
+                        name="Foo"
+                    ).order_by().values('path')[:1]
+                )
+            ).roots()
         )
+
+        print("Subtree of 'One > Graft Here'")
+        print_tree(
+            Category.objects.filter(
+                Q(
+                    path__descendant_of=Subquery(
+                        Category.objects.filter(
+                            name="One",
+                            path__depth=1
+                        ).order_by().values('path')[:1]
+                    )
+                ) &
+                Q(
+                    path__descendant_of=Subquery(
+                        Category.objects.filter(
+                            name="Graft Here",
+                            path__depth=2
+                        ).order_by().values('path')[:1]
+                    )
+                )
+            ).roots()
+        )
+
+        print("TEST #2")
+        print_tree(roots)
         assert False, 'fail'
 
         pass

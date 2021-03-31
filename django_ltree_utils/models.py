@@ -1,6 +1,7 @@
 import collections
 import enum
 from functools import reduce
+from functools import partial
 import itertools as it
 import operator as op
 import string
@@ -14,6 +15,7 @@ from django_ltree_field.fields import LTreeField
 from django_ltree_field.functions import Concat, Subpath
 
 from .paths import Path, PathFactory
+from .position import RelativePosition
 
 
 
@@ -29,6 +31,8 @@ def tree_iterator(queryset, path_field='path'):
             root = next(iterator)
         except StopIteration:
             break
+
+        root._tree_iterator = partial(tree_iterator, path_field=path_field)
 
         # TODO make attribute configurable here
         path = path_getter(root)
@@ -74,72 +78,6 @@ def tree_iterator(queryset, path_field='path'):
 #    EXECUTE PROCEDURE add_money();
 # """
 
-class NodePosition(enum.Enum):
-    CHILD = 'child_of'
-    FIRST_CHILD = 'first_child_of'
-    # Same functionality as child_of
-    LAST_CHILD = 'last_child_of'
-    # These could be "before" and "after"
-    LEFT = 'left_of'
-    RIGHT = 'right_of'
-
-    # Rightmost root element
-    ROOT = 'root'
-
-    # Consider just making its own functions
-    # Or put back on manager or something
-
-    @classmethod
-    def _valid_kwargs(cls) -> str:
-        return ', '.join(repr(position.value) for position in cls)
-
-    @classmethod
-    def _parse_kwargs(cls, kwargs, path_field, path_factory) -> typing.Tuple[Path, typing.Optional[int]]:
-        positions: typing.Dict['NodePosition', typing.Any] = {}
-
-        for position in NodePosition:
-            try:
-                positions[position] = kwargs.pop(position.value)
-            except KeyError:
-                continue
-
-        if len(positions) != 1:
-            raise TypeError(f"Pass exactly one of the following kwargs to TreeManager.create: {cls._valid_kwargs()}")
-
-        position, relative_to = positions.popitem()
-
-        if position == cls.ROOT:
-            if relative_to is not True:
-                raise ValueError(f"Expected kwarg root=True, got root={relative_to!r}")
-            return [], None
-
-        # Duck-type model instances
-        # Might want to use isinstance instead?
-        if hasattr(relative_to, path_field):
-            relative_to = getattr(relative_to, path_field)
-
-        # TODO Better error handling here?
-        # Convert strings to lists?
-        if not isinstance(relative_to, list):
-            relative_to = relative_to.split('.')
-
-        # last_child_of is a more verbose alias for child_of
-        if position in {cls.CHILD, cls.LAST_CHILD}:
-            return relative_to, None
-        elif position == cls.FIRST_CHILD:
-            return relative_to, 0
-        elif position in {cls.LEFT, cls.RIGHT}:
-            parent, child_index = path_factory.split(relative_to)
-
-            if position == cls.RIGHT:
-                child_index += 1
-
-            return parent, child_index
-        else:
-            # Should never get here
-            raise Exception
-
-
 class TreeQuerySet(models.QuerySet):
     def __init__(self, *args, path_field: str = 'path', **kwargs):
         super().__init__(*args, **kwargs)
@@ -163,6 +101,46 @@ class TreeManager(models.Manager):
         self.path_field = path_field
         super().__init__(*args, **kwargs)
 
+
+    def _resolve_position(self, kwargs) -> typing.Tuple[Path, bool]:
+        """
+        Returns an (absolute path, occupied) tuple
+        occupied indicates whether the desired path likely has a node in it
+        (there's the posibility of a false positive but never a false negative, assuming
+        the tree is in correct shape)
+        Takes a relative position from kwargs and passes that to RelativePosition.resolve
+        This gives a standard (parent_path, child_index) tuple
+        In the case that child_index is None, we need to do a query to figure out the last index
+        """
+
+        parent, child_index = RelativePosition.resolve(
+            kwargs, path_field=self.path_field, path_factory=self.path_factory
+        )
+
+        # The only time we're guaranteed a free slot is we're using
+        # last-child or last-root logic
+        # And the index is None in that case
+        occupied = child_index is not None
+
+        if child_index is None:
+            try:
+                last_child: Path = self.filter(
+                    **{f"{self.path_field}__child_of": parent}
+                ).order_by(
+                    f"-{self.path_field}"
+                ).values_list(
+                    # We could get the last part of the path by slicing with a negative index
+                    self.path_field, flat=True
+                )[0]
+
+                child_index = self.path_factory.split(last_child)[1] + 1
+
+            except IndexError:
+                child_index = 0
+
+        return self.path_factory.nth_child(parent, child_index), occupied
+
+
     # Private API, don't call this directly, call .create(child_of=parent)
     # args have underscore to avoid colliding with model fields
     def _create_child(self, parent: Path, child_index: typing.Optional[int], attributes):
@@ -173,40 +151,8 @@ class TreeManager(models.Manager):
             **attributes
         )
 
-    def _get_insertion_path(self, parent: Path, child_index: typing.Optional[int]) -> Path:
-        """
-        Modifies the tree so that we can insert a node as the nth child of parent.
-        Returns the resolved Path.
-        """
-        # Insert at the end, figure out what the actual index needs to be
-        if child_index is None:
-            try:
-                last_child = self.filter(
-                    **{f"{self.path_field}__child_of": parent}
-                ).order_by(
-                    f"-{self.path_field}"
-                ).values_list(
-                    # We could get the last part of the path by slicing with a negative index
-                    self.path_field, flat=True
-                )[0]
-
-                insertion_path = next(
-                    self.path_factory.next_siblings(last_child)
-                )
-
-            except IndexError:
-                insertion_path = self.path_factory.nth_child(parent, 0)
-        else:
-            insertion_path = self.path_factory.nth_child(parent, child_index)
-
-            # Potentially need to move nodes if index was specified
-            # Move nodes to make room for new node
-            self._move_right(
-                insertion_path
-            )
-
-        return insertion_path
-
+    # "Free" insertion point
+    # Or "make available"
     def _move_right(self, gap_path: Path):
         """Move every node to the right (inclusive) of ltree right one
         position.
@@ -232,7 +178,6 @@ class TreeManager(models.Manager):
         if not to_move:
             return 0
 
-
         return self._bulk_move(
             zip(to_move, self.path_factory.next_siblings(gap_path))
         )
@@ -244,11 +189,10 @@ class TreeManager(models.Manager):
         # time you graft a branch
 
         # kwargs is mutated
-        parent, index = NodePosition._parse_kwargs(
-            kwargs, path_field=self.path_field, path_factory=self.path_factory
-        )
+        path, occupied = self._resolve_position(kwargs)
 
-        insertion_path = self._get_insertion_path(parent, index)
+        if occupied:
+            self._move_right(path)
 
         # Recursively walk through branch structure and generate instances with calculated paths
         def walk(node, path):
@@ -259,7 +203,7 @@ class TreeManager(models.Manager):
             for child, path in zip(children, self.path_factory.children(path)):
                 yield from walk(child, path)
 
-        return super().bulk_create(walk(branch, insertion_path), **kwargs)
+        return super().bulk_create(walk(branch, path), **kwargs)
 
 
     def _bulk_move(self, path_tuples: typing.Iterable[typing.Tuple[Path, Path]]) -> int:
@@ -268,12 +212,15 @@ class TreeManager(models.Manager):
         # If you pass multiple path tuples and it happens that one is a subpath
         # of another, very bad things will happen
 
-
         q: typing.List[Q] = []
         cases: typing.List[When] = []
 
         # This would almost certainly be simplified by a VALUES() join
         for old_path, new_path in path_tuples:
+            # Sometimes happens if there are holes left in a tree
+            if old_path == new_path:
+                continue
+
             # Match ltree normal formatting instead of arrays
             new_path = '.'.join(new_path)
 
@@ -297,19 +244,41 @@ class TreeManager(models.Manager):
                 )
             ])
 
-        return self.filter(
-            reduce(op.or_, q)
-        ).update(**{
-            self.path_field: Case(*cases)
-        })
+        if q or cases:
+            return self.filter(
+                reduce(op.or_, q)
+            ).update(**{
+                self.path_field: Case(*cases)
+            })
+        else:
+            return 0
 
-    def create(self, *args, **kwargs):
+    def move(self, instance, **kwargs):
+        path, occupied = self._resolve_position(kwargs)
+
+        if kwargs:
+            raise ValueError(f"Got unexpected kwargs to move(): {kwargs!r}")
+
+        if occupied:
+            self._move_right(path)
+
+        # TODO Refresh model instance or at least clear caches on it?
+
+        self._bulk_move([
+            (instance.path, path),
+        ])
+
+    def create(self, **kwargs):
         # kwargs is mutated
-        parent, index = NodePosition._parse_kwargs(
-            kwargs, path_field=self.path_field, path_factory=self.path_factory
-        )
+        path, occupied = self._resolve_position(kwargs)
 
-        return self._create_child(parent, index, kwargs)
+        if occupied:
+            self._move_right(path)
+
+        return super().create(
+            path=path,
+            **kwargs
+        )
 
 
 class AbstractNode(models.Model):
@@ -318,25 +287,26 @@ class AbstractNode(models.Model):
     objects = TreeManager()
 
     def move(self, **kwargs):
+        return self.objects.move(self, **kwargs)
 
-        position, relative_to, kwargs = NodePosition._parse_kwargs(kwargs)
+    # def add_child(self, **kwargs):
+    #     return self.objects.create(
+    #         child_of=self, **kwargs
+    #     )
 
-        if kwargs:
-            # TODO Better error
-            raise TypeError("Got invalid kwargs to Node.move()")
-
-        self.objects._move()
-
+    # This might be better served as a descriptor
     @cached_property
     def children(self):
         if not hasattr(self, 'descendants'):
             raise TypeError("Node was not annotated with descendants.")
 
-        return list(
-            tree_iterator(
-                self.descendants
-            )
-        )
+        return self._tree_iterator(self.descendants)
+
+        # return list(
+        #     tree_iterator(
+        #         self.descendants
+        #     )
+        # )
 
     def __str__(self):
         return self.path

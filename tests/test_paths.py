@@ -34,11 +34,11 @@ class TestPathCodec(TestCase):
             PathFactory().decode('0010')
         )
 
-    def test_parent(self):
-        self.assertEqual(
-            PathFactory().parent(['A', 'B', 'C']),
-            ['A', 'B']
-        )
+    # def test_parent(self):
+    #     self.assertEqual(
+    #         PathFactory().parent(['A', 'B', 'C']),
+    #         ['A', 'B']
+    #     )
 
     def test_nth_child(self):
         self.assertEqual(
@@ -46,11 +46,11 @@ class TestPathCodec(TestCase):
             ['A', 'B', '0010']
         )
 
-    def test_child_index(self):
-        self.assertEqual(
-            PathFactory().child_index(['A', 'B', '0010']),
-            62
-        )
+    # def test_child_index(self):
+    #     self.assertEqual(
+    #         PathFactory().child_index(['A', 'B', '0010']),
+    #         62
+    #     )
 
     def test_next_siblings(self):
         self.assertEqual(
