@@ -6,6 +6,7 @@ import itertools as it
 import operator as op
 import string
 import typing
+import warnings
 
 from django.contrib.postgres.indexes import GistIndex
 from django.db import models
@@ -20,12 +21,17 @@ from .sorting import sort_func
 
 
 
-# Make this a method on querysets
 def tree_iterator(queryset, path_field='path'):
+    # This will very much break if the tree is not in a good state
 
     iterator = iter(queryset)
 
-    path_getter = op.attrgetter(path_field)
+    if isinstance(path_field, str):
+        path_getter = op.attrgetter(path_field)
+    # Avoid calling attrgetter repeatedly
+    # Could check if it's calalble
+    else:
+        path_getter = path_field
 
     while True:
         try:
@@ -33,13 +39,14 @@ def tree_iterator(queryset, path_field='path'):
         except StopIteration:
             break
 
-        root._tree_iterator = partial(tree_iterator, path_field=path_field)
+        # Need the path field bound?
+        root._tree_iterator = partial(tree_iterator, path_field=path_getter)
 
         # TODO make attribute configurable here
-        path = path_getter(root)
+        parent_path = path_getter(root)
 
         # Set properties so that the rest of the API can work
-        root.depth = len(path)
+        root.depth = len(parent_path)
         root.descendants = []
 
         # We should probably assert that the prefixes match up to this point
@@ -54,6 +61,11 @@ def tree_iterator(queryset, path_field='path'):
 
             if node.depth > root.depth:
                 root.descendants.append(node)
+
+                # Issue warning
+                # if path[:len(parent_path)] != parent_path:
+                #     pass
+
             else:
                 # Shift the element back on to the front
                 iterator = it.chain([node], iterator)
@@ -348,7 +360,7 @@ class SortedTreeManager(models.Manager):
         # Won't work
         kwargs.update(ordering_metadata)
 
-        path, occupied = self._resolve_position(kwargs, ordering=# This is how we're going to)
+        path, occupied = self._resolve_position(kwargs)
 
         if kwargs:
             raise ValueError(f"Got unexpected kwargs to move(): {kwargs!r}")
