@@ -58,10 +58,9 @@ class TestCategoryModel(TestCase):
         print_tree(roots)
 
 
-        assert False, Category.objects.all().values_list('path', 'path__parent')
+        Category.objects.sort(key=lambda node: node.name)
 
-        roots = Category.objects.all().order_by(
-            'path__parent', 'name').roots()
+        roots = Category.objects.all().roots()
 
         print("TEST #2")
         print_tree(roots)

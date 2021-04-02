@@ -111,6 +111,26 @@ class TreeManager(models.Manager):
 
         super().__init__(*args, **kwargs)
 
+    # Recursively instantiate a tree,
+    # with "children" set, in sorted order (if provided)
+    def _init_tree(self, node, key=None):
+        children = (
+            self._init_tree(node, key=key)
+            for node in node.pop('children', [])
+        )
+
+        obj = self.model(
+            path=None,
+            **node
+        )
+
+        if key:
+            obj.children = sorted(children, key=key)
+        else:
+            obj.children = list(children)
+
+        return obj
+
     def _resolve_position(self, instance, position_kwargs):
         """
         Takes the kwargs and resolves it to an absolute path
@@ -186,20 +206,9 @@ class TreeManager(models.Manager):
         # time, but it tended to make things more complicated because the entire tree mutates every
         # time you graft a branch
 
-        # Recursively instantiate the tree, with "children" set, optionally in sorted order
-        def init_tree(node):
-            children = map(init_tree, node.pop('children', []))
 
-            obj = self.model(**node)
 
-            if self._sort_key:
-                obj.children = sorted(children, key=self._sort_key)
-            else:
-                obj.children = list(children)
-
-            return obj
-
-        root = init_tree(branch)
+        root = self._init_tree(branch)
 
         # kwargs is mutated
         moves = self._resolve_position(root, kwargs)
@@ -312,17 +321,26 @@ class TreeManager(models.Manager):
 
         return obj
 
+    # Recursively sort all children with the supplied key func
+    # Will also remove any gaps left from deletion/moving of old nodes
     def sort(self, key):
-        roots = self.all().roots()
+        def flatten(nodes, path):
+            nodes = sorted(nodes, key=key)
 
-        def step(node):
-            node.children.sort(key=key)
-
-            for i, child in enumerate(node.children):
+            for i, node in enumerate(nodes):
                 new_path = self.path_factory.nth_child(path, i)
 
-                if new_path != getattr(child, self.path_field):
-                    setattr(child, self.path_field, new_path)
-                    yield child
+                if new_path != getattr(node, self.path_field):
+                    setattr(node, self.path_field, new_path)
+                    yield node
 
-                yield from step(child, new_path)
+                yield from flatten(node.children, new_path)
+
+        # Return value ???
+        return self.bulk_update(
+            flatten(
+                self.all().roots(),
+                []
+            ),
+            fields=['path']
+        )
