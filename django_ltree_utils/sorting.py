@@ -12,6 +12,8 @@ def sort_func(cols):
                 col = col[1:]
                 reverse = True
 
+            print(ls)
+
             # Python can't sort a list containing some object
             # and also None, because it will fail to compare 3 > None
             # SQL generally puts nulls after all of the values when you do an

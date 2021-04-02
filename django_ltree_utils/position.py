@@ -70,3 +70,54 @@ class RelativePosition(models.TextChoices):
         else:
             # Should never get here
             raise Exception
+
+
+
+class SortedPosition(models.TextChoices):
+    CHILD = 'child_of', _("Child of")
+    SIBLING = 'sibling', _("Sibling of")
+    ROOT = 'root', _("Root")
+
+    @classmethod
+    def resolve(cls, kwargs, path_field: str, path_factory: PathFactory) -> typing.Tuple[Path, typing.Optional[int]]:
+        """ Parse kwargs and normalize relative position to always be
+        tuple = (parent_path, nth-child)
+        """
+        # Path field is used to unwrap/duck-type models that have a path attribute
+        positions: typing.Dict['SortedPosition', typing.Any] = {}
+
+        for position in cls:
+            try:
+                positions[position] = kwargs.pop(position.value)
+            except KeyError:
+                continue
+
+        if len(positions) != 1:
+            raise TypeError(f"Could not resolve position: {positions!r}")
+
+        position, relative_to = positions.popitem()
+
+        if position == cls.ROOT:
+            if relative_to is not True:
+                raise ValueError(f"Expected kwarg root=True, got root={relative_to!r}")
+            return [], None
+
+        # Duck-type model instances
+        # Might want to use isinstance instead?
+        if hasattr(relative_to, path_field):
+            relative_to = getattr(relative_to, path_field)
+
+        # TODO Better error handling here?
+        # Convert strings to lists?
+        if not isinstance(relative_to, list):
+            relative_to = relative_to.split('.')
+
+        # last_child_of is a more verbose alias for child_of
+        if position == cls.CHILD:
+            return relative_to, None
+        elif position == cls.SIBLING:
+            parent, child_index = path_factory.split(relative_to)
+            return parent, None
+        else:
+            # Should never get here
+            raise Exception

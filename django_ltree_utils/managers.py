@@ -16,7 +16,7 @@ from django_ltree_field.fields import LTreeField
 from django_ltree_field.functions import Concat, Subpath
 
 from .paths import Path, PathFactory
-from .position import RelativePosition
+from .position import RelativePosition, SortedPosition
 from .sorting import sort_func
 
 
@@ -88,84 +88,92 @@ class TreeQuerySet(models.QuerySet):
 class TreeManager(models.Manager):
     _queryset_class = TreeQuerySet
 
-    def __init__(self, *args, path_field: str = 'path', path_factory: typing.Optional[PathFactory] = None, **kwargs):
+    def __init__(self, *args, path_field: str = 'path', path_factory: typing.Optional[PathFactory] = None, ordering = (), **kwargs):
         # Default label_length of 4 allows each node to have 14,776,336 children
         # You can (but shouldn't) change this after adding rows to the database, but you must
         # run a migration to zero-pad or truncate labels as appropriate
         # Exercise is left to the reader
         self.path_factory = PathFactory() if path_factory is None else path_factory
         self.path_field = path_field
+        self.ordering = ordering
+
+        # To convert an object to a dictionary for sorting
+        self._ordering_columns = [
+            col[1:] if col[0] == '-' else col for col in ordering
+        ]
+
+        if ordering:
+            self._sort_func = sort_func(ordering)
+            self.Position = SortedPosition
+        else:
+            self._sort_func = None
+            self.Position= RelativePosition
+
         super().__init__(*args, **kwargs)
 
-
-    def _resolve_position(self, kwargs) -> typing.Tuple[Path, bool]:
+    def _resolve_position(self, kwargs, reference=None):
         """
-        Returns an (absolute path, occupied) tuple
-        occupied indicates whether the desired path likely has a node in it
-        (there's the posibility of a false positive but never a false negative, assuming
-        the tree is in correct shape)
-        Takes a relative position from kwargs and passes that to RelativePosition.resolve
-        This gives a standard (parent_path, child_index) tuple
-        In the case that child_index is None, we need to do a query to figure out the last index
+        Takes the kwargs and resolves it to an absolute path
+        Returns a tuple
+        typing.Tuple[Path, typing.List[typing.Tuple[Path, Path]]
+        first element is the parent path we're going to act on
+        second element is a list of (old_path, new_path) tuples that must first be
+        moved
         """
 
-        parent, child_index = RelativePosition.resolve(
+        parent, child_index = self.Position.resolve(
             kwargs, path_field=self.path_field, path_factory=self.path_factory
         )
 
-        # The only time we're guaranteed a free slot is we're using
-        # last-child or last-root logic
-        # And the index is None in that case
-        occupied = child_index is not None
+        children = list(
+            self.filter(
+                **{f"{self.path_field}__child_of": parent}
+            ).values(
+                self.path_field, *self.ordering
+            ).order_by(self.path_field)  # Explicit ordering
+        )
 
+        if reference is None:
+            reference = kwargs
+
+        if self.path_field in reference:
+            raise ValueError(f"Do not manually specify {self.path_field!r} when creating {self.model} instances")
+
+        # Insert object to actually be created
         if child_index is None:
-            try:
-                last_child: Path = self.filter(
-                    **{f"{self.path_field}__child_of": parent}
-                ).order_by(
-                    f"-{self.path_field}"
-                ).values_list(
-                    # We could get the last part of the path by slicing with a negative index
-                    self.path_field, flat=True
-                )[0]
+            children.append(reference)
+        else:
+            children.insert(child_index, reference)
 
-                child_index = self.path_factory.split(last_child)[1] + 1
+        # Sort again if ordering is desired
+        if self._sort_func:
+            self._sort_func(children)
 
-            except IndexError:
-                child_index = 0
+        moves = []
+        final_path = None
 
-        return self.path_factory.nth_child(parent, child_index), occupied
+        for i, child in enumerate(children):
+            current_path = child.get(self.path_field, None)
 
-    # "Free" insertion point
-    # Or "make available"
-    def _move_right(self, gap_path: Path):
-        """Move every node to the right (inclusive) of ltree right one
-        position.
+            if self.path_field in child:
+                # Already has a path, let's check to see if needs to move
+                # We could/should assert that the parent is the same?
+                current_index = self.path_factory.split(current_path)[1]
 
-        Does 2 queries where N is the number of nodes to the right of path
-        """
-
-        to_move: typing.Iterable[Path] = self.filter(
-            **{
-                f"{self.path_field}__sibling_of": gap_path,
-                # Any nodes to the right of or exactly at index
-                f"{self.path_field}__gte": gap_path
-            }
-        ).order_by(
-            # Should already be there
-            f"{self.path_field}"
-        ).values_list(
-            self.path_field, flat=True
-        )
-
-        to_move = list(to_move)
-
-        if not to_move:
-            return 0
-
-        return self._bulk_move(
-            zip(to_move, self.path_factory.next_siblings(gap_path))
-        )
+                # Node isn't in the right position, schedule it for bulk moving
+                if current_index != i:
+                    moves.append(
+                        (
+                            current_path, self.path_factory.nth_child(parent, i)
+                        )
+                    )
+            else:
+                # This is the position we want to insert at, save the index for later
+                assert final_path is None
+                final_path = self.path_factory.nth_child(parent, i)
+        # Returns the final freed ABSOLUTE path, and a list of tuples of nodes
+        # which must moves to make that happen each tuple (src, dest)
+        return final_path, moves
 
     def bulk_create(self, branch, **kwargs):
         # Just does one branch
@@ -174,14 +182,22 @@ class TreeManager(models.Manager):
         # time you graft a branch
 
         # kwargs is mutated
-        path, occupied = self._resolve_position(kwargs)
+        path, moves = self._resolve_position(kwargs, reference=branch)
 
-        if occupied:
-            self._move_right(path)
+        if kwargs:
+            raise ValueError(f"Got un-handled kwargs: {kwargs}")
+
+        # Issue the actual move command
+        self._bulk_move(moves)
 
         # Recursively walk through branch structure and generate instances with calculated paths
         def walk(node, path):
             children = node.pop('children', [])
+
+            # Sort the children if we have ordering!
+            if self._sort_func:
+                self._sort_func(children)
+
             node[self.path_field] = path
             yield self.model(**node)
 
@@ -189,7 +205,6 @@ class TreeManager(models.Manager):
                 yield from walk(child, path)
 
         return super().bulk_create(walk(branch, path), **kwargs)
-
 
     def _bulk_move(self, path_tuples: typing.Iterable[typing.Tuple[Path, Path]]) -> int:
         # We should probably check that all of the old/new paths
@@ -239,6 +254,7 @@ class TreeManager(models.Manager):
             return 0
 
     def move(self, instance, **kwargs):
+        assert False, 'fail -- needs re-implentation due to ordering property'
         path, occupied = self._resolve_position(kwargs)
 
         if kwargs:
@@ -255,136 +271,11 @@ class TreeManager(models.Manager):
 
     def create(self, **kwargs):
         # kwargs is mutated
-        path, occupied = self._resolve_position(kwargs)
+        path, moves = self._resolve_position(kwargs)
 
-        if occupied:
-            self._move_right(path)
+        self._bulk_move(moves)
 
         return super().create(
             path=path,
             **kwargs
         )
-
-
-# TODO SortedTreeManager
-
-class SortedTreeManager(models.Manager):
-    _queryset_class = TreeQuerySet
-
-    # ordering is a tuple or list of columns, same as you would pass
-    # set on Meta.ordering
-
-    def __init__(self, *args, ordering = (), path_field: str = 'path', path_factory: typing.Optional[PathFactory] = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.ordering = ordering
-
-        # To convert an object to a dictionary for sorting
-        self._ordering_columns = [
-            col[1:] if col[0] == '-' else col for col in ordering
-        ]
-
-        if ordering:
-            self._sort_func = sort_func(ordering)
-            self.Position = SortedPosition
-        else:
-            self._sort_func = None
-            self.Position= RelativePosition
-
-
-    def _resolve_position(self, kwargs):
-        """
-        Returns a tuple
-        typing.Tuple[Path, typing.List[typing.Dict[Any, Any]]]
-        first element is the parent path we're going to act on
-        second element is a list of dictionaries representing children
-        in the desired order
-        One of the children will not have a key for path_field,
-        and will have all of the keys from kwargs
-        This is the "open slot" which is intended for a new or moved node
-        """
-
-        parent, child_index = self.Position.resolve(
-            kwargs, path_field=self.path_field, path_factory=self.path_factory
-        )
-
-        children = self.filter(
-            **{f"{self.path_field}__child_of": parent}
-        ).values(
-            self.path_field, *self.ordering
-        ).order_by(self.path_field)  # Explicit ordering
-
-        # Insert object to actually be created
-        if child_index is None:
-            children.append(kwargs)
-        else:
-            children.insert(child_index, kwargs)
-
-        # Sort again if ordering is desired
-        if self._sort_func:
-            self._sort_func(children)
-
-        return parent, children
-
-    def _rearrange(self, parent, children):
-        to_move = []
-
-        for i, child in enumerate(children):
-            current_path = child.get(self.path_field, None)
-
-            # Doesn't have a path, leave a slot open or this one
-            if current_path is None:
-                continue
-
-            # Already has a path, let's check to see if needs to move
-            # We could/should assert that the parent is the same?
-            current_index = self.path_factory.split(current_path)[1]
-
-            # Node isn't in the right position, schedule it for bulk moving
-            if current_index != i:
-                to_move.append(
-                    (
-                        current_path, self.path_factory.nth_child(parent, i)
-                    )
-                )
-
-        if to_move:
-            self._bulk_move(to_move)
-
-    def move(self, instance, **kwargs):
-
-        # We need to make the instance comparable to its siblings
-        ordering_metadata = {
-            key: getattr(instance, key) for key in self._ordering_columns
-        }
-
-        # Won't work
-        kwargs.update(ordering_metadata)
-
-        path, occupied = self._resolve_position(kwargs)
-
-        if kwargs:
-            raise ValueError(f"Got unexpected kwargs to move(): {kwargs!r}")
-
-        if occupied:
-            self._move_right(path)
-
-        # TODO Refresh model instance or at least clear caches on it?
-
-        self._bulk_move([
-            (instance.path, path),
-        ])
-
-    def create(self, **kwargs):
-        # kwargs is mutated
-        parent, children = self._resolve_position(kwargs)
-
-        # Issue the actual move command
-        self._rearrange(parent, children)
-
-        # What if more than one is None for some reason?
-        # StopIteration error?
-        new_child = next(
-            child for child in children in child.get(self.path_field, None) is None
-        )
-
-        return super().create(**new_child)
