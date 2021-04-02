@@ -18,60 +18,53 @@ from django_ltree_utils.utils import print_tree
 class TestCategoryModel(TestCase):
 
     def setUp(self):
-        SortedNode.objects.bulk_create({
-            'name': 'Fruit',
+
+        Category.objects.bulk_create({
+            'name': 'One',
             'children': [{
-                'name': 'Banana'
+                'name': 'Graft Here',
+                'children': [{
+                    'name': 'One'
+                }]
             }, {
-                'name': 'Apple'
+                'name': 'Two'
             }]
         }, root=True)
 
-        roots = SortedNode.objects.all().roots()
+        Category.objects.bulk_create({
+            'name': 'Grafted',
+            'children': [{
+                'name': 'One',
+                'children': [{
+                    'name': 'One'
+                }]
+            }, {
+                'name': 'Two'
+            }]
+        }, child_of=Category.objects.get(name='Graft Here'))
+
+
+        foo = Category.objects.create(root=True, name='Foo')
+
+        bar = Category.objects.create(child_of=foo, name='Bar')
+        qux = Category.objects.create(after=bar, name='Qux')
+        Category.objects.create(child_of=qux, name='Quxy')
+        Category.objects.create(after=qux, name='Qux-2')
+        qur = Category.objects.create(before=qux, name='Qur')
+
+        roots = Category.objects.all().roots()
 
         print("TEST #1")
         print_tree(roots)
 
-        assert False, 'fail'
 
-        # Category.objects.bulk_create({
-        #     'name': 'One',
-        #     'children': [{
-        #         'name': 'Graft Here',
-        #         'children': [{
-        #             'name': 'One'
-        #         }]
-        #     }, {
-        #         'name': 'Two'
-        #     }]
-        # }, root=True)
-        #
-        # Category.objects.bulk_create({
-        #     'name': 'Grafted',
-        #     'children': [{
-        #         'name': 'One',
-        #         'children': [{
-        #             'name': 'One'
-        #         }]
-        #     }, {
-        #         'name': 'Two'
-        #     }]
-        # }, child_of=Category.objects.get(name='Graft Here'))
+        assert False, Category.objects.all().values_list('path', 'path__parent')
 
+        roots = Category.objects.all().order_by(
+            'path__parent', 'name').roots()
 
-        # foo = Category.objects.create(root=True, name='Foo')
-        #
-        # bar = Category.objects.create(child_of=foo, name='Bar')
-        # qux = Category.objects.create(after=bar, name='Qux')
-        # Category.objects.create(child_of=qux, name='Quxy')
-        # Category.objects.create(after=qux, name='Qux-2')
-        # qur = Category.objects.create(before=qux, name='Qur')
-
-        # roots = Category.objects.all().roots()
-        #
-        # print("TEST #1")
-        # print_tree(roots)
-
+        print("TEST #2")
+        print_tree(roots)
         # print("Subtree of 'Foo'")
         # print_tree(
         #     Category.objects.filter(

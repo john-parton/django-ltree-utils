@@ -95,23 +95,23 @@ class TreeManager(models.Manager):
         # Exercise is left to the reader
         self.path_factory = PathFactory() if path_factory is None else path_factory
         self.path_field = path_field
-        self.ordering = ordering
-
-        # To convert an object to a dictionary for sorting
-        self._ordering_columns = [
-            col[1:] if col[0] == '-' else col for col in ordering
-        ]
+        # self.ordering = ordering
 
         if ordering:
-            self._sort_func = sort_func(ordering)
+            if callable(ordering):
+                self._sort_key = ordering
+            elif isinstance(ordering, str):
+                self._sort_key = op.attrgetter(ordering)
+            else:
+                self._sort_key = op.attrgetter(*ordering)
             self.Position = SortedPosition
         else:
-            self._sort_func = None
+            self._sort_key = None
             self.Position= RelativePosition
 
         super().__init__(*args, **kwargs)
 
-    def _resolve_position(self, kwargs, reference=None):
+    def _resolve_position(self, instance, position_kwargs):
         """
         Takes the kwargs and resolves it to an absolute path
         Returns a tuple
@@ -120,60 +120,65 @@ class TreeManager(models.Manager):
         second element is a list of (old_path, new_path) tuples that must first be
         moved
         """
+        # instance is mutated
+        # the path_field is set
+
+        # So we can find the instance again later
+        instance_id = instance.id
 
         parent, child_index = self.Position.resolve(
-            kwargs, path_field=self.path_field, path_factory=self.path_factory
+            position_kwargs, path_field=self.path_field, path_factory=self.path_factory
         )
 
-        children = list(
-            self.filter(
-                **{f"{self.path_field}__child_of": parent}
-            ).values(
-                self.path_field, *self.ordering
-            ).order_by(self.path_field)  # Explicit ordering
-        )
+        children = self.filter(
+            **{f"{self.path_field}__child_of": parent}
+        ).order_by(self.path_field)
 
-        if reference is None:
-            reference = kwargs
+        # If we don't have a specified ordering,
+        # we don't need all of the columns, just these two
+        if not self._sort_key:
+            children = children.only(
+                'id', self.path_field
+            )
 
-        if self.path_field in reference:
-            raise ValueError(f"Do not manually specify {self.path_field!r} when creating {self.model} instances")
+        # Pull entire queryset into memory so we can manually sort/inspect
+        children = list(children)
 
         # Insert object to actually be created
+        # at desired index
+        # None is last index
         if child_index is None:
-            children.append(reference)
+            children.append(instance)
         else:
-            children.insert(child_index, reference)
+            children.insert(child_index, instance)
 
         # Sort again if ordering is desired
-        if self._sort_func:
-            self._sort_func(children)
+        if self._sort_key:
+            children.sort(key=self._sort_key)
+            # self._sort_func(children)
 
+        # Move tuples
+        # (old_path, new_path)
         moves = []
-        final_path = None
 
         for i, child in enumerate(children):
-            current_path = child.get(self.path_field, None)
+            correct_path = self.path_factory.nth_child(parent, i)
 
-            if self.path_field in child:
-                # Already has a path, let's check to see if needs to move
-                # We could/should assert that the parent is the same?
-                current_index = self.path_factory.split(current_path)[1]
+            if child.id == instance_id:
+                # Mutate passed instance
+                setattr(child, self.path_field, correct_path)
+                continue
 
-                # Node isn't in the right position, schedule it for bulk moving
-                if current_index != i:
-                    moves.append(
-                        (
-                            current_path, self.path_factory.nth_child(parent, i)
-                        )
-                    )
-            else:
-                # This is the position we want to insert at, save the index for later
-                assert final_path is None
-                final_path = self.path_factory.nth_child(parent, i)
-        # Returns the final freed ABSOLUTE path, and a list of tuples of nodes
-        # which must moves to make that happen each tuple (src, dest)
-        return final_path, moves
+            current_path = getattr(child, self.path_field)
+
+            # Need to move this one
+            if current_path != correct_path:
+                moves.append(
+                    (current_path, correct_path)
+                )
+
+        # Return any children which must be moved
+        return moves
 
     def bulk_create(self, branch, **kwargs):
         # Just does one branch
@@ -181,30 +186,37 @@ class TreeManager(models.Manager):
         # time, but it tended to make things more complicated because the entire tree mutates every
         # time you graft a branch
 
+        # Recursively instantiate the tree, with "children" set, optionally in sorted order
+        def init_tree(node):
+            children = map(init_tree, node.pop('children', []))
+
+            obj = self.model(**node)
+
+            if self._sort_key:
+                obj.children = sorted(children, key=self._sort_key)
+            else:
+                obj.children = list(children)
+
+            return obj
+
+        root = init_tree(branch)
+
         # kwargs is mutated
-        path, moves = self._resolve_position(kwargs, reference=branch)
+        moves = self._resolve_position(root, kwargs)
 
-        if kwargs:
-            raise ValueError(f"Got un-handled kwargs: {kwargs}")
+        # Recursively update the path attribute of all descendants and yield out flattened
+        # nodes
+        def flatten(node):
+            yield node
+            for i, child in enumerate(node.children):
+                child.path = self.path_factory.nth_child(node.path, i)
+                yield from flatten(child)
 
-        # Issue the actual move command
-        self._bulk_move(moves)
+        super().bulk_create(
+            flatten(root), **kwargs
+        )
 
-        # Recursively walk through branch structure and generate instances with calculated paths
-        def walk(node, path):
-            children = node.pop('children', [])
-
-            # Sort the children if we have ordering!
-            if self._sort_func:
-                self._sort_func(children)
-
-            node[self.path_field] = path
-            yield self.model(**node)
-
-            for child, path in zip(children, self.path_factory.children(path)):
-                yield from walk(child, path)
-
-        return super().bulk_create(walk(branch, path), **kwargs)
+        return root
 
     def _bulk_move(self, path_tuples: typing.Iterable[typing.Tuple[Path, Path]]) -> int:
         # We should probably check that all of the old/new paths
@@ -253,29 +265,64 @@ class TreeManager(models.Manager):
         else:
             return 0
 
-    def move(self, instance, **kwargs):
-        assert False, 'fail -- needs re-implentation due to ordering property'
-        path, occupied = self._resolve_position(kwargs)
+    def move(self, instance, **position_kwargs):
+        assert False, 'fail -- need to test this better'
+        current_path = instance.path
 
-        if kwargs:
-            raise ValueError(f"Got unexpected kwargs to move(): {kwargs!r}")
+        assert current_path
 
-        if occupied:
-            self._move_right(path)
-
-        # TODO Refresh model instance or at least clear caches on it?
-
-        self._bulk_move([
-            (instance.path, path),
-        ])
-
-    def create(self, **kwargs):
-        # kwargs is mutated
-        path, moves = self._resolve_position(kwargs)
+        moves = self._resolve_position(obj, position_kwargs)
 
         self._bulk_move(moves)
 
-        return super().create(
-            path=path,
+        # Get the current node's position.
+        # It might have changed because it could have been a child of
+        # moves
+        current_path = self.filter(id=instance.id).values_list('path', flat=True)[0]
+
+
+
+
+        self._bulk_move([
+            (current_path, instance.path)
+        ])
+
+    def create(self, **kwargs):
+
+        position_kwargs = {}
+
+        for position in self.Position:
+            try:
+                position_kwargs[position.value] = kwargs.pop(position.value)
+            except KeyError:
+                continue
+
+        obj = self.model(
+            path=None,
             **kwargs
         )
+
+        self._for_write = True
+
+        moves = self._resolve_position(obj, position_kwargs)
+
+        self._bulk_move(moves)
+
+        obj.save(force_insert=True, using=self.db)
+
+        return obj
+
+    def sort(self, key):
+        roots = self.all().roots()
+
+        def step(node):
+            node.children.sort(key=key)
+
+            for i, child in enumerate(node.children):
+                new_path = self.path_factory.nth_child(path, i)
+
+                if new_path != getattr(child, self.path_field):
+                    setattr(child, self.path_field, new_path)
+                    yield child
+
+                yield from step(child, new_path)
