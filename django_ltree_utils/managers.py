@@ -17,7 +17,6 @@ from django_ltree_field.functions import Concat, Subpath
 
 from .paths import Path, PathFactory
 from .position import RelativePosition, SortedPosition
-from .sorting import sort_func
 
 
 
@@ -150,19 +149,40 @@ class TreeManager(models.Manager):
             position_kwargs, path_field=self.path_field, path_factory=self.path_factory
         )
 
-        children = self.filter(
-            **{f"{self.path_field}__child_of": parent}
-        ).order_by(self.path_field)
+        # Root nodes
+        if parent == []:
+            queryset = self.filter(
+                **{f'{self.path_field}__depth': 1}
+            )
+        else:
+            queryset = self.filter(
+                **{f"{self.path_field}__child_of": parent}
+            )
+
+        # if instance.id is not None:
+        #     children = children.exclude(id=instance.id)
+
+        queryset = queryset.order_by(self.path_field)
 
         # If we don't have a specified ordering,
         # we don't need all of the columns, just these two
         if not self._sort_key:
-            children = children.only(
+            queryset = queryset.only(
                 'id', self.path_field
             )
 
-        # Pull entire queryset into memory so we can manually sort/inspect
-        children = list(children)
+        current_pos = None
+        children = []
+
+        # If the instance is already saved and a sibling here
+        # (so if you're trying to move an existing node to a different position)
+        # We need to add a temporary placeholder so that the insertion
+        # Point doesn't move on us
+        for i, child in enumerate(queryset):
+            if child.id == instance_id:
+                current_pos = i
+            else:
+                children.append(child)
 
         # Insert object to actually be created
         # at desired index
@@ -170,6 +190,10 @@ class TreeManager(models.Manager):
         if child_index is None:
             children.append(instance)
         else:
+            # Correct ????
+            if current_pos is not None and child_index > current_pos:
+                child_index -= 1
+
             children.insert(child_index, instance)
 
         # Sort again if ordering is desired
@@ -212,6 +236,8 @@ class TreeManager(models.Manager):
 
         # kwargs is mutated
         moves = self._resolve_position(root, kwargs)
+
+        self._bulk_move(moves)
 
         # Recursively update the path attribute of all descendants and yield out flattened
         # nodes
@@ -280,7 +306,7 @@ class TreeManager(models.Manager):
 
         assert current_path
 
-        moves = self._resolve_position(obj, position_kwargs)
+        moves = self._resolve_position(instance, position_kwargs)
 
         self._bulk_move(moves)
 
