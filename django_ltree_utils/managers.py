@@ -130,6 +130,53 @@ class TreeManager(models.Manager):
 
         return obj
 
+
+    def _get_relative_position(self, absolute_path):
+
+        # Duck-type model instances
+        # Might want to use isinstance instead?
+        if hasattr(absolute_path, self.path_field):
+            absolute_path = getattr(absolute_path, self.path_field)
+
+        if self.Position == SortedPosition:
+            try:
+                parent = self.filter(
+                    **{f'{self.path_field}__parent_of': absolute_path}
+                ).get()
+
+                return self.Position.CHILD, parent
+
+            except self.model.DoesNotExist:
+                pass
+
+            return self.Position.ROOT, None
+
+        else:
+            try:
+                next_sibling = self.filter(
+                    **{f'{self.path_field}__sibling_of': absolute_path},
+                    **{f'{self.path_field}__gt': absolute_path}
+                ).order_by(self.path_field)[0]
+
+                return self.Position.BEFORE, next_sibling
+
+            except IndexError:
+                pass
+
+            try:
+                parent = self.get(
+                    **{f'{self.path_field}__parent_of': absolute_path}
+                )
+
+                return self.Position.LAST_CHILD, parent
+
+            except self.model.DoesNotExist:
+                pass
+
+            return self.Position.ROOT, None
+
+
+    # Could be _get_absolute_position
     def _resolve_position(self, instance, position_kwargs):
         """
         Takes the kwargs and resolves it to an absolute path

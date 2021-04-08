@@ -4,7 +4,6 @@ from django import forms
 
 def move_node_form_factory(manager):
 
-
     class Form(forms.ModelForm):
 
         position = forms.ChoiceField(choices=manager.Position.choices)
@@ -12,39 +11,15 @@ def move_node_form_factory(manager):
             queryset=manager.all(), required=False
         )
 
-        def _reverse_relative(self):
-            try:
-                next_sibling = manager.filter(
-                    **{f'{manager.path_field}__sibling_of': self.instance.path},
-                    **{f'{manager.path_field}__gt': self.instance.path}
-                ).order_by(manager.path_field)[0]
-
-                return manager.Position.BEFORE, next_sibling
-
-            except IndexError:
-                pass
-
-            try:
-                parent = manager.filter(
-                    **{f'{manager.path_field}__parent_of': self.instance.path}
-                ).get()
-
-                return manager.Position.LAST_CHILD, parent
-
-            except manager.model.DoesNotExist:
-                pass
-
-            return manager.Position.ROOT, None
-
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
 
             if self.instance and self.instance.path:
                 self.fields['relative_to'].queryset = manager.exclude(
-                    **{f'{manager.path_field}__descendant_of': self.instance.path}
+                    **{f'{manager.path_field}__descendant_of': getattr(self.instance, manager.path_field)}
                 )
 
-                position, relative_to = self._reverse_relative()
+                position, relative_to = manager._get_relative_position(self.instance)
 
                 self.fields['position'].initial = position
                 self.fields['relative_to'].initial = relative_to
