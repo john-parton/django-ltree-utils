@@ -80,11 +80,11 @@ ASGI_APPLICATION = 'tests.asgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'test_db',
-        'USER': 'test_user',
-        'PASSWORD': 'test_password',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'PASSWORD': 'postgres',
         'HOST': 'localhost',
-        'PORT': '5445',
+        'PORT': '5444',
     }
 }
 

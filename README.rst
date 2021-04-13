@@ -56,13 +56,20 @@ Features
 Running Tests
 -------------
 
+You need to have a reasonably updated version of PostgreSQL listening on port 5444. You can use
+`docker-compose <https://docs.docker.com/compose/>` to start a server
+
+::
+
+    docker-compose up
+
 Does the code actually work?
 
 ::
 
     source <YOURVIRTUALENV>/bin/activate
-    (myenv) $ pip install tox
-    (myenv) $ tox
+    (myenv) $ pip install -r requirements.txt -r requirements_test.txt --upgrade
+    (myenv) $ ./runtests.py
 
 
 Development commands
