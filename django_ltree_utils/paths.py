@@ -20,9 +20,14 @@ Path = typing.List[str]
 ALPHANUMERIC_SENSITIVE = string.digits + string.ascii_uppercase + string.ascii_lowercase
 
 
-# I don't want to wrap literally every single path in an object just to mess with it
-# This just puts our path tools in one place
 class PathFactory:
+    """
+    Responsible for manipulating and creating "path" lists.
+    Each label is treated as a fixed-length, zero-padded base62-encoded integer.
+    This ensures that we can create a new path to the left or right of an existing path while maintaining
+    lexicographical order.
+    """
+
     def __init__(self, alphabet: str = ALPHANUMERIC_SENSITIVE, max_length: int = 4):
         # Alphabet is in ASCII order
         self.alphabet = alphabet

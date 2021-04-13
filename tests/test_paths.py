@@ -14,7 +14,9 @@ from django.test import TestCase
 from django_ltree_utils.paths import PathFactory
 
 
-class TestPathCodec(TestCase):
+class TestPathFactory(TestCase):
+    """
+    These are teh basic
 
     def test_encoding(self):
 
