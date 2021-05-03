@@ -5,6 +5,7 @@ ignore  =
     W503
 exclude =
     django_ltree_utils/migrations,
+    django_ltree_utils/test_utils/test_app/migrations,
     .git,
     .tox,
     docs/conf.py,

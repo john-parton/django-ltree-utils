@@ -1,7 +1,6 @@
 from django import forms
 
 
-
 def move_node_form_factory(manager):
 
     class Form(forms.ModelForm):
@@ -24,14 +23,12 @@ def move_node_form_factory(manager):
                 self.fields['position'].initial = position
                 self.fields['relative_to'].initial = relative_to
 
-
         class Meta:
             model = manager.model
             exclude = [manager.path_field]
 
         def clean(self, *args, **kwargs):
             cleaned_data = super().clean(*args, **kwargs)
-
 
             position = cleaned_data['position']
             relative_to = True if manager.Position(position) == manager.Position.ROOT else cleaned_data['relative_to']

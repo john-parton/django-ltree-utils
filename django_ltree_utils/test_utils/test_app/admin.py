@@ -11,7 +11,6 @@ class CategoryAdmin(admin.ModelAdmin):
 
     list_display = ['_str_with_depth', 'path']
 
-
     def _str_with_depth(self, instance):
 
         depth_indicator = '\u00A0' * 6 * (len(instance.path) - 1)

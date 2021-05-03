@@ -16,7 +16,8 @@ from django_ltree_utils.paths import PathFactory
 
 class TestPathFactory(TestCase):
     """
-    These are teh basic
+    PathFactory is a basic helper class to convert
+    """
 
     def test_encoding(self):
 

@@ -4,7 +4,6 @@ from django_ltree_utils.managers import TreeManager
 from django_ltree_utils.models import AbstractNode
 
 
-
 class Category(AbstractNode):
     name = models.CharField(max_length=100)
 

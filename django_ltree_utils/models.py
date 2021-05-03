@@ -1,22 +1,13 @@
-import collections
-import enum
-from functools import reduce
 from functools import partial
 import itertools as it
 import operator as op
-import string
-import typing
 
 from django.contrib.postgres.indexes import GistIndex
 from django.db import models
-from django.db.models import Case, When, Value, Q
 from django.utils.functional import cached_property
 from django_ltree_field.fields import LTreeField
-from django_ltree_field.functions import Concat, Subpath
 
 from .managers import TreeManager
-from .paths import Path, PathFactory
-
 
 
 # Make this a method on querysets
@@ -59,7 +50,6 @@ def tree_iterator(queryset, path_field='path'):
                 break
 
         yield root
-
 
 
 # Create your models here.
@@ -108,7 +98,6 @@ class AbstractNode(models.Model):
 
     def __str__(self):
         return self.path
-
 
     # def move(self, **kwargs):
     #

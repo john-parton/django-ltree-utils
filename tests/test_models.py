@@ -8,11 +8,10 @@ test_django-ltree-utils
 Tests for `django-ltree-utils` models module.
 """
 
-from django.db.models import Subquery, Q
 from django.test import TestCase
 
-from django_ltree_utils.test_utils.test_app.models import Category, SortedNode
-from django_ltree_utils.utils import print_tree
+# from django_ltree_utils.test_utils.test_app.models import Category, SortedNode
+# from django_ltree_utils.utils import print_tree
 
 
 class TestCategoryModel(TestCase):

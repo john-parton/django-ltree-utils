@@ -72,7 +72,6 @@ class RelativePosition(models.TextChoices):
             raise Exception
 
 
-
 class SortedPosition(models.TextChoices):
     CHILD = 'child_of', _("Child of")
     SIBLING = 'sibling', _("Sibling of")

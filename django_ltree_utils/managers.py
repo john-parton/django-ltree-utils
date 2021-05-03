@@ -1,23 +1,15 @@
-import collections
-import enum
 from functools import reduce
 from functools import partial
 import itertools as it
 import operator as op
-import string
 import typing
-import warnings
 
-from django.contrib.postgres.indexes import GistIndex
 from django.db import models
 from django.db.models import Case, When, Value, Q
-from django.utils.functional import cached_property
-from django_ltree_field.fields import LTreeField
 from django_ltree_field.functions import Concat, Subpath
 
 from .paths import Path, PathFactory
 from .position import RelativePosition, SortedPosition
-
 
 
 def tree_iterator(queryset, path_field='path'):
@@ -87,7 +79,12 @@ class TreeQuerySet(models.QuerySet):
 class TreeManager(models.Manager):
     _queryset_class = TreeQuerySet
 
-    def __init__(self, *args, path_field: str = 'path', path_factory: typing.Optional[PathFactory] = None, ordering = (), **kwargs):
+    def __init__(self,
+                 *args,
+                 path_field: str = 'path',
+                 path_factory: typing.Optional[PathFactory] = None,
+                 ordering=(),
+                 **kwargs):
         # Default label_length of 4 allows each node to have 14,776,336 children
         # You can (but shouldn't) change this after adding rows to the database, but you must
         # run a migration to zero-pad or truncate labels as appropriate
@@ -106,7 +103,7 @@ class TreeManager(models.Manager):
             self.Position = SortedPosition
         else:
             self._sort_key = None
-            self.Position= RelativePosition
+            self.Position = RelativePosition
 
         super().__init__(*args, **kwargs)
 
@@ -129,7 +126,6 @@ class TreeManager(models.Manager):
             obj.children = list(children)
 
         return obj
-
 
     def _get_relative_position(self, absolute_path):
 
@@ -175,8 +171,8 @@ class TreeManager(models.Manager):
 
             return self.Position.ROOT, None
 
-
     # Could be _get_absolute_position
+
     def _resolve_position(self, instance, position_kwargs):
         """
         Takes the kwargs and resolves it to an absolute path
@@ -277,8 +273,6 @@ class TreeManager(models.Manager):
         # time, but it tended to make things more complicated because the entire tree mutates every
         # time you graft a branch
 
-
-
         root = self._init_tree(branch)
 
         # kwargs is mutated
@@ -361,9 +355,6 @@ class TreeManager(models.Manager):
         # It might have changed because it could have been a child of
         # moves
         current_path = self.filter(id=instance.id).values_list('path', flat=True)[0]
-
-
-
 
         self._bulk_move([
             (current_path, instance.path)
