@@ -2,5 +2,5 @@
 from django.apps import AppConfig
 
 
-class DjangoLtreeUtilsConfig(AppConfig):
+class DjangoLTreeUtilsConfig(AppConfig):
     name = 'django_ltree_utils'
