@@ -97,7 +97,7 @@ class AbstractNode(models.Model):
         # )
 
     def __str__(self):
-        return self.path
+        return '.'.join(self.path)
 
     # def move(self, **kwargs):
     #
