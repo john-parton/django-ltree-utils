@@ -1,3 +1,4 @@
+import copy
 from functools import reduce
 from functools import partial
 import itertools as it
@@ -176,10 +177,8 @@ class TreeManager(models.Manager):
     def _resolve_position(self, instance, position_kwargs):
         """
         Takes the kwargs and resolves it to an absolute path
-        Returns a tuple
-        typing.Tuple[Path, typing.List[typing.Tuple[Path, Path]]
-        first element is the parent path we're going to act on
-        second element is a list of (old_path, new_path) tuples that must first be
+        Returns typing.List[typing.Tuple[Path, Path]]
+        a list of (old_path, new_path) tuples that must first be
         moved
         """
         # instance is mutated
@@ -342,23 +341,29 @@ class TreeManager(models.Manager):
             return 0
 
     def move(self, instance, **position_kwargs):
-        assert False, 'fail -- need to test this better'
-        current_path = instance.path
+        # assert False, 'fail -- need to test this better'
+        current_path = copy.deepcopy(instance.path)
+        current_depth = len(current_path)
+
+        # assert False, position_kwargs
 
         assert current_path
 
         moves = self._resolve_position(instance, position_kwargs)
 
+        new_depth = len(instance.path)
+
+        if new_depth > current_depth and instance.path[:current_depth] == current_path:
+            raise ValueError("Cannot move a node to be its own descendant.")
+
+        moves.append(
+            (current_path, instance.path)
+        )
+
+        # assert False, moves
+
         self._bulk_move(moves)
 
-        # Get the current node's position.
-        # It might have changed because it could have been a child of
-        # moves
-        current_path = self.filter(id=instance.id).values_list('path', flat=True)[0]
-
-        self._bulk_move([
-            (current_path, instance.path)
-        ])
 
     def create(self, **kwargs):
 
