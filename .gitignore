@@ -48,3 +48,4 @@ docs/_build
 
 # setuptools_scm
 django_ltree_utils/version.py
+.python-version
