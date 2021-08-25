@@ -7,6 +7,7 @@ import typing
 
 from django.db import models
 from django.db.models import Case, When, Value, Q
+from django_ltree_field.fields import LTreeField
 from django_ltree_field.functions import Concat, Subpath
 
 from .paths import Path, PathFactory
@@ -335,7 +336,8 @@ class TreeManager(models.Manager):
             return self.filter(
                 reduce(op.or_, q)
             ).update(**{
-                self.path_field: Case(*cases)
+                self.path_field: Case(*cases,
+                output_field=LTreeField())
             })
         else:
             return 0
